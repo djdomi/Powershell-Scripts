@@ -1,0 +1,21 @@
+#powershell
+# Created by github.com/djdomi
+# Created under the GPL v3
+
+Set-ExecutionPolicy -ExecutionPolicy Unrestricted
+#Set-PsRepository -name PSGallery -trusted
+#Import-Module PowerShellGet
+install-module -AllowClobber VMware.PowerCLI -force
+
+#You have 2 options in here:
+
+#1: Keep asking
+$vCenter =  Read-Host -Prompt "Enter vCenter Name"
+
+#2: Keep same host
+#$vCenter =  plan.host.name
+$Credential = Get-Credential -Message "Enter Login Credential"
+
+
+Connect-VIServer -Server $vCenter -Credential $Credential -protocol https
+Get-VM $vm | Get-Snapshot | Remove-Snapshot -Confirm:$false
