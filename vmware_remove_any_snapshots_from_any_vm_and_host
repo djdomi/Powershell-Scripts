@@ -1,21 +1,105 @@
-#powershell
-# Created by github.com/djdomi
-# Created under the GPL v3
+# Set TLS 1.2 as required for the script
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-Set-ExecutionPolicy -ExecutionPolicy Unrestricted
-#Set-PsRepository -name PSGallery -trusted
-#Import-Module PowerShellGet
-install-module -AllowClobber VMware.PowerCLI -force
+# Überprüfung und Setzung der Execution Policy
+$executionPolicy = Get-ExecutionPolicy
+if ($executionPolicy -ne "Unrestricted") {
+    Write-Output "Execution Policy ist nicht korrekt konfiguriert. Setze Execution Policy..."
+    Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Force
+}
 
-#You have 2 options in here:
+# Überprüfung der PSGallery-Repository-Einstellung
+$psRepository = Get-PSRepository -Name PSGallery
+if ($psRepository.InstallationPolicy -ne "Trusted") {
+    Write-Output "PSGallery-Repository ist nicht korrekt konfiguriert. Setze Installation Policy..."
+    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+}
 
-#1: Keep asking
-$vCenter =  Read-Host -Prompt "Enter vCenter Name"
+# Überprüfung des Installationsstatus von VMware.PowerCLI
+$module = Get-Module -Name VMware.PowerCLI -ListAvailable
+if (-not $module) {
+    Write-Output "VMware.PowerCLI ist nicht installiert. Es wird jetzt installiert..."
+    Install-Module -AllowClobber VMware.PowerCLI -Force
+}
 
-#2: Keep same host
-#$vCenter =  plan.host.name
-$Credential = Get-Credential -Message "Enter Login Credential"
+$directoryPath = Join-Path $env:APPDATA "vmware_snapshot_removeal"
 
+# Überprüfen, ob das Verzeichnis bereits existiert
+if (-not (Test-Path $directoryPath)) {
+    # Verzeichnis anlegen (stumm)
+    $TestDir = New-Item -ItemType Directory -Path $directoryPath -ErrorAction SilentlyContinue
+}
 
-Connect-VIServer -Server $vCenter -Credential $Credential -protocol https
-Get-VM $vm | Get-Snapshot | Remove-Snapshot -Confirm:$false
+$credentialFilePath = "$directoryPath\credentials.xml"
+$hostFilePath = "$directoryPath\Hostinfo.txt"
+$vCenter = ""
+$credential = $null
+
+# Überprüfung auf das Vorhandensein der Anmeldeinformationsdatei
+if (Test-Path $credentialFilePath) {
+    $storeCredentials = Read-Host "Möchtest du die Anmeldeinformationen laden? (Ja/Nein)"
+
+    if ($storeCredentials -eq "Ja") {
+        $credential = Import-Clixml -Path $credentialFilePath
+    }
+}
+
+# Überprüfung auf das Vorhandensein der Hostinformationsdatei
+if (Test-Path $hostFilePath) {
+    $storeHost = Read-Host "Möchtest du den Hostnamen laden? (Ja/Nein)"
+
+    if ($storeHost -eq "Ja") {
+        $vCenter = Get-Content -Path $hostFilePath
+    }
+}
+
+# Wenn keine Anmeldeinformationen vorhanden sind, werden diese abgefragt
+if (!$credential) {
+    $storeCredentials = Read-Host "Die Anmeldeinformationsdatei existiert nicht oder du hast angegeben, sie nicht zu laden. Möchtest du die Anmeldeinformationen speichern? (Ja/Nein)"
+
+    if ($storeCredentials -eq "Ja") {
+        $credential = Get-Credential
+        $credential | Export-Clixml -Path $credentialFilePath
+    }
+}
+
+# Wenn kein Hostname vorhanden ist, wird dieser abgefragt
+if ([string]::IsNullOrWhiteSpace($vCenter)) {
+    $storeHost = Read-Host "Die Hostinformationsdatei existiert nicht oder du hast angegeben, sie nicht zu laden. Möchtest du den Hostnamen speichern? (Ja/Nein)"
+
+    if ($storeHost -eq "Ja") {
+        $vCenter = Read-Host "Gib den VCSA-Servernamen ein:"
+        $vCenter | Out-File -FilePath $hostFilePath
+    }
+}
+
+# Überprüfung auf leere Anmeldeinformationen
+if (!$credential) {
+    Write-Output "Anmeldeinformationen sind erforderlich. Skript wird beendet."
+    exit
+}
+
+# Überprüfung auf leeren Hostnamen
+if ([string]::IsNullOrWhiteSpace($vCenter)) {
+    Write-Output "Der Hostname darf nicht leer sein. Skript wird beendet."
+    exit
+}
+
+Connect-VIServer -Server $vCenter -Credential $Credential -Protocol https
+$vmSnapshots = Get-VM | Get-Snapshot
+if ($vmSnapshots) {
+    Write-Output "Folgende Snapshots werden entfernt:"
+    $vmSnapshots | Format-Table VM, Name, Created
+
+    $confirm = Read-Host "Möchtest du die Snapshots entfernen? (Ja/Nein)"
+    if ($confirm -eq "Ja") {
+        $vmSnapshots | Remove-Snapshot -Confirm:$false
+        Write-Output "Snapshots wurden entfernt."
+    } else {
+        Write-Output "Vorgang wurde abgebrochen. Snapshots wurden nicht entfernt."
+    }
+} else {
+    Write-Output "Es sind keine Snapshots vorhanden."
+}
+
+Disconnect-VIServer -Server $vCenter -Force
