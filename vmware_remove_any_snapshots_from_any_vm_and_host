@@ -8,6 +8,12 @@ if ($executionPolicy -ne "Unrestricted") {
     Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Force
 }
 
+# Überprüfung und Setzung der PowerCLIConfiguration
+$PowerCLIConfiguration = Get-PowerCLIConfiguration -InvalidCertificateAction Ignore -Scope AllUsers
+if ($PowerCLIConfiguration -ne "Ignore") {
+    Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Scope AllUsers -Confirm:$false | Out-Null
+}
+
 # Überprüfung der PSGallery-Repository-Einstellung
 $psRepository = Get-PSRepository -Name PSGallery
 if ($psRepository.InstallationPolicy -ne "Trusted") {
