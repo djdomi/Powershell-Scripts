@@ -1,15 +1,37 @@
-#powershell
-# Created by github.com/djdomi
-# Created under the GPL v3
-
 # Set TLS 1.2 for the script
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$directoryPath = Join-Path $env:APPDATA "vmware_snapshot_removal"
+$PowerCLIConfiguration = Get-PowerCLIConfiguration -InvalidCertificateAction Ignore -Scope AllUsers
+if ($PowerCLIConfiguration -ne "Ignore") {
+        Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Scope AllUsers -confirm:$false
+}
+
+# Check and set Execution Policy
+$executionPolicy = Get-ExecutionPolicy
+if ($executionPolicy -ne "Unrestricted") {
+    Write-Output "Execution Policy is not correctly configured. Setting Execution Policy..."
+    Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Force
+}
+
+# Check PSGallery repository setting
+$psRepository = Get-PSRepository -Name PSGallery
+if ($psRepository.InstallationPolicy -ne "Trusted") {
+    Write-Output "PSGallery repository is not correctly configured. Setting Installation Policy..."
+    Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+}
+
+# Check installation status of VMware.PowerCLI module
+$module = Get-Module -Name VMware.PowerCLI -ListAvailable
+if (-not $module) {
+    Write-Output "VMware.PowerCLI is not installed. Installing now..."
+    Install-Module -AllowClobber VMware.PowerCLI -Force
+}
+
+$directoryPath = Join-Path $env:APPDATA "vmware_snapshot_removeal"
 
 # Check if the directory already exists
 if (-not (Test-Path $directoryPath)) {
-    # Create the directory (silently)
+    # Create directory (silent)
     $TestDir = New-Item -ItemType Directory -Path $directoryPath -ErrorAction SilentlyContinue
 }
 
@@ -29,7 +51,7 @@ if (Test-Path $credentialFilePath) {
 
 # Check for the presence of the host information file
 if (Test-Path $hostFilePath) {
-    $storeHost = Read-Host "Do you want to load the hostname? (Yes/No)"
+    $storeHost = Read-Host "Do you want to load the host name? (Yes/No)"
 
     if ($storeHost -eq "Yes") {
         $vCenter = Get-Content -Path $hostFilePath
@@ -46,9 +68,9 @@ if (!$credential) {
     }
 }
 
-# If no hostname is available, prompt for it
+# If no host name is available, prompt for it
 if ([string]::IsNullOrWhiteSpace($vCenter)) {
-    $storeHost = Read-Host "The host information file does not exist or you specified not to load it. Do you want to store the hostname? (Yes/No)"
+    $storeHost = Read-Host "The host information file does not exist or you specified not to load it. Do you want to store the host name? (Yes/No)"
 
     if ($storeHost -eq "Yes") {
         $vCenter = Read-Host "Enter the VCSA server name:"
@@ -62,27 +84,46 @@ if (!$credential) {
     exit
 }
 
-# Check for empty hostname
+# Check for empty host name
 if ([string]::IsNullOrWhiteSpace($vCenter)) {
-    Write-Output "The hostname cannot be empty. Script will exit."
+    Write-Output "The host name cannot be empty. Script will exit."
     exit
 }
 
+# Connect to vCenter server
 Connect-VIServer -Server $vCenter -Credential $Credential -Protocol https
-$vmSnapshots = Get-VM | Get-Snapshot
-if ($vmSnapshots) {
-    Write-Output "The following snapshots will be removed:"
-    $vmSnapshots | Format-Table VM, Name, Created
 
-    $confirm = Read-Host "Do you want to remove the snapshots? (Yes/No)"
-    if ($confirm -eq "Yes") {
-        $vmSnapshots | Remove-Snapshot -Confirm:$false
-        Write-Output "Snapshots have been removed."
-    } else {
-        Write-Output "Operation cancelled. Snapshots have not been removed."
-    }
-} else {
-    Write-Output "There are no snapshots available."
+# Get all VMs
+$vms = Get-VM
+
+# Initialize progress counters
+$totalSnapshots = 0
+$completedSnapshots = 0
+
+# Count the total number of snapshots
+foreach ($vm in $vms) {
+    $totalSnapshots += (Get-Snapshot -VM $vm).Count
 }
 
+# Loop through each VM and remove snapshots
+foreach ($vm in $vms) {
+    Write-Output "Removing snapshots for VM $($vm.Name)..."
+
+    # Get snapshots for the current VM
+    $snapshots = Get-Snapshot -VM $vm
+
+    # Loop through each snapshot and remove it
+    foreach ($snapshot in $snapshots) {
+        Write-Output "Removing snapshot $($snapshot.Name)..."
+        Remove-Snapshot -Snapshot $snapshot -Confirm:$false
+
+        $completedSnapshots++
+        $progressPercentage = ($completedSnapshots / $totalSnapshots) * 100
+        Write-Progress -Activity "Removing Snapshots" -Status "Progress: $($progressPercentage.ToString("F2"))%" -PercentComplete $progressPercentage
+    }
+}
+
+# Disconnect from vCenter server
 Disconnect-VIServer -Server $vCenter -Force
+
+Write-Output "All snapshots should been removed. Lazy Admin...."
