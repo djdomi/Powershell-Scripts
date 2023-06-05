@@ -1,0 +1,88 @@
+#powershell
+# Created by github.com/djdomi
+# Created under the GPL v3
+
+# Set TLS 1.2 for the script
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$directoryPath = Join-Path $env:APPDATA "vmware_snapshot_removal"
+
+# Check if the directory already exists
+if (-not (Test-Path $directoryPath)) {
+    # Create the directory (silently)
+    $TestDir = New-Item -ItemType Directory -Path $directoryPath -ErrorAction SilentlyContinue
+}
+
+$credentialFilePath = "$directoryPath\credentials.xml"
+$hostFilePath = "$directoryPath\Hostinfo.txt"
+$vCenter = ""
+$credential = $null
+
+# Check for the presence of the credential file
+if (Test-Path $credentialFilePath) {
+    $storeCredentials = Read-Host "Do you want to load the credentials? (Yes/No)"
+
+    if ($storeCredentials -eq "Yes") {
+        $credential = Import-Clixml -Path $credentialFilePath
+    }
+}
+
+# Check for the presence of the host information file
+if (Test-Path $hostFilePath) {
+    $storeHost = Read-Host "Do you want to load the hostname? (Yes/No)"
+
+    if ($storeHost -eq "Yes") {
+        $vCenter = Get-Content -Path $hostFilePath
+    }
+}
+
+# If no credentials are available, prompt for them
+if (!$credential) {
+    $storeCredentials = Read-Host "The credential file does not exist or you specified not to load it. Do you want to store the credentials? (Yes/No)"
+
+    if ($storeCredentials -eq "Yes") {
+        $credential = Get-Credential
+        $credential | Export-Clixml -Path $credentialFilePath
+    }
+}
+
+# If no hostname is available, prompt for it
+if ([string]::IsNullOrWhiteSpace($vCenter)) {
+    $storeHost = Read-Host "The host information file does not exist or you specified not to load it. Do you want to store the hostname? (Yes/No)"
+
+    if ($storeHost -eq "Yes") {
+        $vCenter = Read-Host "Enter the VCSA server name:"
+        $vCenter | Out-File -FilePath $hostFilePath
+    }
+}
+
+# Check for empty credentials
+if (!$credential) {
+    Write-Output "Credentials are required. Script will exit."
+    exit
+}
+
+# Check for empty hostname
+if ([string]::IsNullOrWhiteSpace($vCenter)) {
+    Write-Output "The hostname cannot be empty. Script will exit."
+    exit
+}
+
+Connect-VIServer -Server $vCenter -Credential $Credential -Protocol https
+$vmSnapshots = Get-VM | Get-Snapshot
+if ($vmSnapshots) {
+    Write-Output "The following snapshots will be removed:"
+    $vmSnapshots | Format-Table VM, Name, Created
+
+    $confirm = Read-Host "Do you want to remove the snapshots? (Yes/No)"
+    if ($confirm -eq "Yes") {
+        $vmSnapshots | Remove-Snapshot -Confirm:$false
+        Write-Output "Snapshots have been removed."
+    } else {
+        Write-Output "Operation cancelled. Snapshots have not been removed."
+    }
+} else {
+    Write-Output "There are no snapshots available."
+}
+
+Disconnect-VIServer -Server $vCenter -Force
