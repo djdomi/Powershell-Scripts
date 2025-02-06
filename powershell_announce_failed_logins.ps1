@@ -1,61 +1,55 @@
-#Set-ExecutionPolicy unrestricted
+# Setzt die Execution Policy (nur falls nötig)
+# Set-ExecutionPolicy unrestricted
 
-#Liest die jeweilige Security ID aus und schickt diese dann an eine Mail, verknüpft mit Event Trigger
+# Parameter
+$Eventlog = "Security"
+$EventID = 4771
 
-$Eventlog = „Security“ # (Security, Application, System)
-#old $EventID = „4625“
-#$EventID ist die ID auf welche Reagiert werden soll
-$EventID = „4771“
-
-#Absenderaddresse, vollständig
+# E-Mail Parameter
 $From = "from@some.domain"
-
-#Empfängeradresse, vollständig
-
 $To = "to@some.domain"
 $CC = "cc@some-domain"
-$Subject = „Login Monitoring [BETA 1.1]“
-$MailServer = „mail.some.domain“
+$Subject = "Login Monitoring [BETA 1.1]"
+$MailServer = "mail.some.domain"
+
+# Log-Dateien
 $LOGPATH = "C:\Skripting\Logs\Audit\"
-$LOGTMP1 = "tmp.txt"
-$LOGTMP = $LOGPATH + $LOGTMP1
-$LOG_NOMAIL = "nomail_login.txt"
-$LOG_MAIL = "mail_login.txt"
-$LOG1 = $LOGPATH + $LOG_NOMAIL
-$LOG2 = $LOGPATH + $LOG_MAIL
+$LOGTMP = "$LOGPATH\tmp.txt"
+$LOG_NOMAIL = "$LOGPATH\nomail_login.txt"
+$LOG_MAIL = "$LOGPATH\mail_login.txt"
 
 # >>>>>>>> Query Eventlog <<<<<<<<
-#Schreibt die Event Logs in $LOGTMP
-get-winevent -FilterHashtable @{Logname='Security';ID=4771}  -MaxEvents 1 |fl > $LOGTMP
+$Event = Get-WinEvent -FilterHashtable @{LogName=$Eventlog; ID=$EventID} -MaxEvents 1
 
-$Kontoname =      Get-Content $LOGTMP | findstr /I kontoname
-$Clientadresse =  Get-Content $LOGTMP | findstr /I Clientadresse
-$Clientport =     Get-Content $LOGTMP | findstr /I TimeCreated
-$Fehlercode =     Get-Content $LOGTMP | findstr /I Fehlercode:
-$ErrorMsg = @(get-content "C:\Skripting\error.txt") | findstr "$Fehlercode"
+if ($Event) {
+    $Message = $Event.Message
+    $TimeCreated = $Event.TimeCreated
 
+    # Extrahiere relevante Informationen
+    $Kontoname = if ($Message -match "Kontoname:\s+(\S+)") { $matches[1] } else { "Unbekannt" }
+    $Clientadresse = if ($Message -match "Clientadresse:\s+(\S+)") { $matches[1] } else { "Unbekannt" }
+    $Fehlercode = if ($Message -match "Fehlercode:\s+(\S+)") { $matches[1] } else { "Unbekannt" }
 
-#$Output = "Fehlerhafter Login:" + "`r`n" + $Kontoname + "`r`n" +  $Clientadresse+ "`r`n" + "                            " + $Clientport + "`r`n" + $Fehlercode + "`r`n"
+    # Fehlercode Lookup aus Datei
+    $ErrorMsg = (Get-Content "C:\Skripting\error.txt" -Encoding UTF8) | Where-Object { $_ -match "$Fehlercode" }
+    if (-not $ErrorMsg) { $ErrorMsg = "Unbekannter Fehlercode: $Fehlercode" }
 
-# HTML Output - neu:
-$Output = "<b><h1>Fehlerhafter Login: </h1></b>"  +"<br>"+ $Kontoname  + "<br>" + $Clientadresse  + "<br>" + $Clientport  + "<br>"  + "Fehlercode: " + $ErrorMsg
+    # HTML-Mail-Body
+    $Output = @"
+    <b><h1>Fehlerhafter Login:</h1></b>
+    <p><b>Kontoname:</b> $Kontoname</p>
+    <p><b>Clientadresse:</b> $Clientadresse</p>
+    <p><b>Zeitpunkt:</b> $TimeCreated</p>
+    <p><b>Fehlercode:</b> $ErrorMsg</p>
+"@
 
-$Body = $Output
-
-
-# >>>>>>>> Send Mail-Alert <<<<<<<<
- if ($Kontoname -like '*RDS-Broker$*')
- { 
-        #Wenn RDS-Broker als user
-        echo $Output > $LOG1
-        exit
- } 
-    else 
- { 
-        #Alles andere soll er mailen 
-        #Send-MailMessage -From $From -To $To -Subject $Subject -SmtpServer $MailServer -Body $Body
-        Send-MailMessage -Cc $CC -From $From -To $To -Subject $Subject -SmtpServer $MailServer -BodyAsHtml "$Body "
-        #echo $Output > C:\temp\true_loggin.txt 
-        echo $Output > $LOG2
- }
- del $LOGTMP
+    # >>>>>>>> Send Mail-Alert <<<<<<<<
+    if ($Kontoname -like '*RDS-Broker$*') {
+        # Falls der Benutzer "RDS-Broker" ist, nur ins Log schreiben
+        $Output | Set-Content -Path $LOG_NOMAIL -Encoding UTF8
+    } else {
+        # Andernfalls eine E-Mail versenden
+        Send-MailMessage -Cc $CC -From $From -To $To -Subject $Subject -SmtpServer $MailServer -BodyAsHtml $Output
+        $Output | Set-Content -Path $LOG_MAIL -Encoding UTF8
+    }
+}
